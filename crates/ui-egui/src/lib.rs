@@ -18,6 +18,7 @@ pub mod previews;
 pub mod ribbon;
 pub mod theme;
 pub mod widgets;
+pub mod window_geometry;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -55,6 +56,8 @@ pub struct UiState {
     pub dark: bool,
     pub nav_tab: String,
     pub show_discord: bool,
+    /// Desktop: the main window's size and position, restored at the next launch.
+    pub window: Option<window_geometry::WindowGeometry>,
 }
 
 impl Default for UiState {
@@ -68,6 +71,7 @@ impl Default for UiState {
             dark: false,
             nav_tab: "headings".into(),
             show_discord: true,
+            window: None,
         }
     }
 }
