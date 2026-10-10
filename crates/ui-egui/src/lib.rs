@@ -198,7 +198,10 @@ impl WordApp {
             if let Some(d) = &self.services.download {
                 d(&name, &bytes);
             }
-            self.session.dirty = false;
+            // Only an editable-format download is a save; PDF, PNG and TXT copies leave the changes unsaved (#168).
+            if is_editable_format(&name) {
+                self.session.dirty = false;
+            }
             return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
         }
         let r = self.session.run(id, &params).map_err(|e| e.to_string());
@@ -617,9 +620,35 @@ pub fn now_ms() -> f64 {
     }
 }
 
+/// Whether a file name is a format that keeps the editable document (same list as `file.save`).
+fn is_editable_format(name: &str) -> bool {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    ["docx", "docm", "dotx", "dotm", "odt", "rtf", "json"].contains(&ext.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #168: PDF, PNG and TXT downloads must not clear the Edited indicator.
+    #[test]
+    fn lossy_downloads_keep_the_document_dirty() {
+        let mut app = app();
+        app.services.download = Some(Box::new(|_, _| {}));
+        // The ids the Backstage Export page uses for each format, plus the PDF export command.
+        let cases = [
+            ("file.saveAs", "a.txt", true),
+            ("file.saveAs", "a.pdf", true),
+            ("file.exportPdf", "a.pdf", true),
+            ("file.exportPng", "a.png", true),
+            ("file.saveAs", "a.docx", false),
+        ];
+        for (id, name, dirty_after) in cases {
+            app.session.dirty = true;
+            assert!(app.run(id, json!({"path": name})).is_ok(), "{name}");
+            assert_eq!(app.session.dirty, dirty_after, "{name}");
+        }
+    }
 
     fn mod_key(key: egui::Key) -> egui::Event {
         egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
