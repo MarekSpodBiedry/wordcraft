@@ -160,4 +160,25 @@ mod tests {
         let mut a = app_with(|| Some(ClipboardPicture::Files(vec![PathBuf::from("/tmp/notes.txt")])));
         assert_eq!(a.run("edit.paste", json!({})).unwrap_err(), "the clipboard is empty");
     }
+
+    /// The ribbon and context-menu Paste commands send no text; the system clipboard's text is
+    /// pasted, as Ctrl+V pastes it, even with a picture copied alongside (#584).
+    #[test]
+    fn paste_without_text_reads_the_system_clipboard() {
+        let services = Services {
+            clipboard_text: Some(Box::new(|| Some("outside".to_string()))),
+            clipboard_picture: Some(Box::new(|| Some(ClipboardPicture::Pixels { width: 4, height: 4, rgba: vec![200; 4 * 4 * 4] }))),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        a.run("edit.paste", json!({})).unwrap();
+        a.run("edit.pasteText", json!({})).unwrap();
+        a.run("edit.pasteMerge", json!({})).unwrap();
+        assert_eq!(pictures(&mut a), 0);
+        let focus = a.session.sel.focus.clone();
+        assert_eq!(a.session.doc.para_at(&focus).map(|p| p.text.clone()), Some("outside".repeat(3)));
+        // Paste Special offers the clipboard's text too.
+        let r = a.run("edit.pasteSpecial", json!({})).unwrap();
+        assert!(r["formats"].as_array().is_some_and(|f| f.iter().any(|x| x["id"] == "text")), "{r}");
+    }
 }
