@@ -183,4 +183,25 @@ mod tests {
         let r = a.run("edit.pasteSpecial", json!({})).unwrap();
         assert!(r["formats"].as_array().is_some_and(|f| f.iter().any(|x| x["id"] == "text")), "{r}");
     }
+
+    /// Ribbon Paste after copying a picture file in a file manager inserts the picture, not its
+    /// path, as Ctrl+V does.
+    #[test]
+    fn ribbon_paste_of_copied_picture_files_inserts_them() {
+        let path = std::env::temp_dir().join(format!("wc-ribbon-paste-{}.png", std::process::id()));
+        std::fs::write(&path, png_from_rgba(4, 4, vec![200; 4 * 4 * 4]).unwrap()).unwrap();
+        let (text, file) = (path.to_string_lossy().into_owned(), path.clone());
+        let services = Services {
+            clipboard_text: Some(Box::new(move || Some(text.clone()))),
+            clipboard_picture: Some(Box::new(move || Some(ClipboardPicture::Files(vec![file.clone()])))),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        let r = a.run("edit.paste", json!({}));
+        let _ = std::fs::remove_file(&path);
+        r.unwrap();
+        assert_eq!(pictures(&mut a), 1);
+        let focus = a.session.sel.focus.clone();
+        assert_eq!(a.session.doc.para_at(&focus).map(|p| p.text.contains("wc-ribbon-paste")), Some(false));
+    }
 }

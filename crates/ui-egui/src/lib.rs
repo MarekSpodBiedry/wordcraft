@@ -343,6 +343,15 @@ impl WordApp {
             && let Some(text) = self.services.clipboard_text.as_ref().and_then(|f| f()).filter(|t| !t.is_empty())
             && let Some(o) = params.as_object_mut()
         {
+            // Picture files copied in a file manager reach us as their paths: paste the pictures,
+            // as Ctrl+V does.
+            if id == "edit.paste"
+                && self.session.math.is_none()
+                && paste_picture::names_picture_files(&text)
+                && let Some(r) = paste_picture::paste(self)
+            {
+                return r;
+            }
             o.insert("text".into(), Value::String(text));
         }
         // Paste without system clipboard text: a picture there is newer than our own copy (copying
