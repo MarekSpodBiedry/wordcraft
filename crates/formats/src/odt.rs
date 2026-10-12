@@ -1407,10 +1407,10 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     let mut doc = model::to_doc(&parse(bytes)?);
-    if let Ok(mut z) = zip::ZipArchive::new(Cursor::new(bytes)) {
-        if let Some(s) = read_entry(&mut z, "styles.xml") {
-            apply_page_layout(&s, &mut doc.last_section);
-        }
+    if let Ok(mut z) = zip::ZipArchive::new(Cursor::new(bytes))
+        && let Some(s) = read_entry(&mut z, "styles.xml")
+    {
+        apply_page_layout(&s, &mut doc.last_section);
     }
     Ok(doc)
 }
@@ -1440,7 +1440,10 @@ fn apply_page_layout(xml: &[u8], sec: &mut wordcraft_doc::SectionProps) {
     });
     let Some(a) = master.and_then(|m| layouts.remove(&m)) else { return };
     let len = |k: &str| get(&a, k).and_then(length).filter(|v| *v >= 0.0);
-    if let (Some(w), Some(h)) = (len("fo:page-width").filter(|v| *v > 0.0), len("fo:page-height").filter(|v| *v > 0.0)) {
+    // Like the DOCX reader: a page is at least half an inch; at most 22 inches (Word's limit), so a hostile
+    // `1e30pt` can't reach layout.
+    let page = |k: &str| len(k).filter(|v| *v >= 36.0).map(|v| v.min(1584.0));
+    if let (Some(w), Some(h)) = (page("fo:page-width"), page("fo:page-height")) {
         sec.page_w = w;
         sec.page_h = h;
     }
@@ -1456,7 +1459,8 @@ fn apply_page_layout(xml: &[u8], sec: &mut wordcraft_doc::SectionProps) {
         ("fo:margin-right", &mut sec.margin_right),
     ] {
         if let Some(v) = len(k) {
-            *slot = v;
+            // No margin is larger than the page's longer side (as `w:pgMar` in the DOCX reader).
+            *slot = v.min(sec.page_w.max(sec.page_h));
         }
     }
 }
@@ -1550,6 +1554,34 @@ mod tests {
         apply_page_layout(xml, &mut sec);
         assert!(sec.landscape);
         assert_eq!((sec.page_w, sec.page_h, sec.margin_left, sec.margin_top), (720.0, 360.0, 72.0, 72.0));
+    }
+
+    #[test]
+    fn hostile_page_layout_values_are_clamped() {
+        let styles = |w: &str, h: &str, m: &str| {
+            format!(
+                r#"<office:document-styles><office:automatic-styles><style:page-layout style:name="pm1">
+                <style:page-layout-properties fo:page-width="{w}" fo:page-height="{h}" fo:margin-top="{m}"
+                fo:margin-bottom="{m}" fo:margin-left="{m}" fo:margin-right="{m}"/></style:page-layout>
+                </office:automatic-styles><office:master-styles>
+                <style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles>
+                </office:document-styles>"#
+            )
+        };
+        // Huge values: the page is capped at 22 inches and margins at the page's longer side.
+        let mut sec = wordcraft_doc::SectionProps::default();
+        apply_page_layout(styles("1e30pt", "1e30in", "1e30pt").as_bytes(), &mut sec);
+        assert_eq!((sec.page_w, sec.page_h), (1584.0, 1584.0));
+        assert_eq!((sec.margin_top, sec.margin_left), (1584.0, 1584.0));
+        // Negative, zero, tiny and non-numeric values leave the defaults alone.
+        let def = wordcraft_doc::SectionProps::default();
+        for (w, h, m) in [("-10in", "-5in", "-1in"), ("0pt", "0pt", "NaNpt"), ("1pt", "2pt", "infpt"), ("NaN", "inf", "x")] {
+            let mut sec = wordcraft_doc::SectionProps::default();
+            apply_page_layout(styles(w, h, m).as_bytes(), &mut sec);
+            assert_eq!((sec.page_w, sec.page_h), (def.page_w, def.page_h), "{w} {h}");
+            assert_eq!((sec.margin_top, sec.margin_right), (def.margin_top, def.margin_right), "{m}");
+            assert!(sec.page_w.is_finite() && sec.margin_left.is_finite());
+        }
     }
 
     #[test]
