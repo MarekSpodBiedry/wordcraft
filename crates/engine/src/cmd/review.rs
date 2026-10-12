@@ -461,9 +461,8 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
                 return Some(start..end);
             }
             // Comment anchors split a revision's text into several runs; the revision goes on past them.
-            let is_anchor = |k: usize| {
-                matches!(p.object_at(runs[k].0.start), Some(InlineObject::CommentStart { .. } | InlineObject::CommentEnd { .. }))
-            };
+            let is_anchor =
+                |k: usize| matches!(p.object_at(runs[k].0.start), Some(InlineObject::CommentStart { .. } | InlineObject::CommentEnd { .. }));
             let same = |k: usize| (runs[k].1.ins, runs[k].1.del) == key;
             let mut k = i;
             while k > 0 {
