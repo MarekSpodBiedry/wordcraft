@@ -26,7 +26,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 | On-canvas objects: select, drag, resize handles, nudge | ✅ tested (#228) | ✅ | 75% | — |
 | Rotation handle, crop handles on canvas, alignment guides, smart guides | rotation handle (Shift: 15° steps), turned frames resize along their axes (#332); crop handles and guides missing | ✅ | 25% | 3–5 |
 | Selection: word/sentence/paragraph clicks, dragging after a double-click/triple-click/Ctrl+click extends by whole words/paragraphs/sentences (#549), Shift extend, F8 extend mode, column (Alt+drag, #237) | ✅ | ✅ | 90% | 1 |
-| Zoom: Ctrl+scroll, pinch (#179), zoom buttons (#232), pages side by side when zoomed out (#251) | ✅ | ✅ | 85% | — |
+| Zoom: Ctrl+scroll, pinch (#179), zoom buttons (#232), pages side by side when zoomed out (#251), still one per row after One Page or Page Width (#768) | ✅ | ✅ | 85% | — |
 | Touchpad smooth/inertial scroll | ✅ (#252) | ✅ | 90% | — |
 | Caret motion: keys and typing glide the caret to its new place (100 ms, `cubic-bezier(0, 0, 0, 1)`), the blink fades (530 ms on and off, 100 ms fades); clicks and scripted moves don't glide. File › Options › Advanced › Animation (`ui.caretAnimation`) turns it off | ✅ as measured from Word for Windows (`caret_glide.rs`); zoom levels other than 100%, modifier keys and off-screen moves not measured | ✅ on Windows; Word for Mac not measured | 90% | 1–2 |
 | Status bar (page x of y, words, language, view buttons, zoom slider) | ✅ | ✅ | 80% | — |

@@ -78,6 +78,9 @@ pub struct ViewState {
     #[serde(default)]
     pub alt_text_pane: bool,
     pub multi_page: bool,
+    /// One Page or Page Width was chosen last: keep one page per row when a typed or wheel zoom replaces the fit mode.
+    #[serde(default)]
+    pub single_column: bool,
     /// Zoom to fit: "pageWidth", "onePage", "multiplePages", or empty.
     pub fit: String,
     pub web_width: f32,
@@ -132,6 +135,7 @@ impl Default for ViewState {
             accessibility_pane: false,
             alt_text_pane: false,
             multi_page: false,
+            single_column: false,
             fit: String::new(),
             web_width: 800.0,
             dark_mode: false,

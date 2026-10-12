@@ -2509,6 +2509,25 @@ fn page_and_table_gridlines_toggle_independently() {
     assert_eq!(state["tableGridlines"], false);
 }
 
+/// Issue #768: zooming by percent after One Page or Page Width keeps one page per row.
+#[test]
+fn zoom_after_one_page_keeps_single_column() {
+    let mut s = s();
+    run(&mut s, "view.onePage", json!({}));
+    assert!(s.view.single_column);
+    run(&mut s, "view.zoomOut", json!({}));
+    assert!(s.view.fit.is_empty() && s.view.single_column);
+    run(&mut s, "view.zoom", json!({"value": 50}));
+    assert!(s.view.single_column);
+    run(&mut s, "view.multiplePages", json!({}));
+    assert!(!s.view.single_column);
+    run(&mut s, "view.zoomIn", json!({}));
+    assert!(!s.view.single_column);
+    run(&mut s, "view.pageWidth", json!({}));
+    run(&mut s, "view.sideToSide", json!({}));
+    assert!(!s.view.single_column);
+}
+
 /// Issue #67: View › Zoom steps. Zoom In/Out leave a fit mode and step 10% from the current zoom
 /// (the UI keeps `view.zoom` equal to the shown zoom while a fit mode is on), and never get stuck
 /// short of the 10%–500% limits.

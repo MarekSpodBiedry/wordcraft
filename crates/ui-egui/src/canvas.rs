@@ -339,7 +339,7 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
     // two-page spread; One Page and Page Width show one page per row; Web Layout has no pages).
     let (min_cols, auto) = if v.read_mode {
         (2, false)
-    } else if web || v.fit == "onePage" || v.fit == "pageWidth" {
+    } else if web || v.fit == "onePage" || v.fit == "pageWidth" || v.single_column {
         (1, false)
     } else if v.multi_page {
         (2, true)
