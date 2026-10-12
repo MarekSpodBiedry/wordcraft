@@ -1226,7 +1226,9 @@ mod tests {
             s.run(if accept { "review.accept" } else { "review.reject" }, &json!({})).unwrap();
             let p = body_para(&s);
             assert!(p.runs.iter().all(|r| r.props.ins.is_none()), "no tracked insertion is left");
-            assert_eq!(p.text.contains("hello"), accept, "{:?}", p.text);
+            // The comment's anchors are objects in the text; read past them.
+            let shown: String = p.text.chars().filter(|c| *c != wordcraft_doc::para::OBJ).collect();
+            assert_eq!(shown.contains("hello"), accept, "{:?}", p.text);
         }
     }
 
