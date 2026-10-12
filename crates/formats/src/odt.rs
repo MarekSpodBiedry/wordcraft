@@ -1406,7 +1406,59 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
-    Ok(model::to_doc(&parse(bytes)?))
+    let mut doc = model::to_doc(&parse(bytes)?);
+    if let Ok(mut z) = zip::ZipArchive::new(Cursor::new(bytes)) {
+        if let Some(s) = read_entry(&mut z, "styles.xml") {
+            apply_page_layout(&s, &mut doc.last_section);
+        }
+    }
+    Ok(doc)
+}
+
+/// Read the page size, orientation and margins of the first master page in `styles.xml` into `sec`.
+fn apply_page_layout(xml: &[u8], sec: &mut wordcraft_doc::SectionProps) {
+    let mut layouts: HashMap<String, Attrs> = HashMap::new();
+    let mut cur: Option<String> = None;
+    let mut master: Option<String> = None;
+    events(xml, |ev| match ev {
+        Ev::Start(q, a) => match local(&q) {
+            "page-layout" if q.starts_with("style:") => cur = get(&a, "style:name").map(String::from),
+            "page-layout-properties" => {
+                if let Some(n) = &cur {
+                    layouts.insert(n.clone(), a);
+                }
+            }
+            "master-page" if master.is_none() => master = get(&a, "style:page-layout-name").map(String::from),
+            _ => {}
+        },
+        Ev::End(q) => {
+            if local(&q) == "page-layout" {
+                cur = None;
+            }
+        }
+        Ev::Text(_) => {}
+    });
+    let Some(a) = master.and_then(|m| layouts.remove(&m)) else { return };
+    let len = |k: &str| get(&a, k).and_then(length).filter(|v| *v >= 0.0);
+    if let (Some(w), Some(h)) = (len("fo:page-width").filter(|v| *v > 0.0), len("fo:page-height").filter(|v| *v > 0.0)) {
+        sec.page_w = w;
+        sec.page_h = h;
+    }
+    sec.landscape = match get(&a, "style:print-orientation") {
+        Some("landscape") => true,
+        Some("portrait") => false,
+        _ => sec.page_w > sec.page_h,
+    };
+    for (k, slot) in [
+        ("fo:margin-top", &mut sec.margin_top),
+        ("fo:margin-bottom", &mut sec.margin_bottom),
+        ("fo:margin-left", &mut sec.margin_left),
+        ("fo:margin-right", &mut sec.margin_right),
+    ] {
+        if let Some(v) = len(k) {
+            *slot = v;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1465,6 +1517,39 @@ mod tests {
             let f = fmt(p);
             assert!(f.bold && f.color == Some(Rgb(255, 0, 0)) && f.size == Some(24.0), "{}: {f:?}", p.text());
         }
+    }
+
+    #[test]
+    fn page_size_orientation_and_margins_round_trip() {
+        // #810: the page setup written on export is read back on import.
+        let mut doc = Document::new();
+        doc.last_section.page_w = 841.0;
+        doc.last_section.page_h = 595.0;
+        doc.last_section.landscape = true;
+        doc.last_section.margin_left = 36.0;
+        doc.last_section.margin_top = 54.0;
+        let back = import(&export(&doc).unwrap()).unwrap();
+        let s = &back.last_section;
+        assert!(s.landscape);
+        assert_eq!((s.page_w, s.page_h), (841.0, 595.0));
+        assert_eq!((s.margin_left, s.margin_top), (36.0, 54.0));
+    }
+
+    #[test]
+    fn page_layout_follows_the_first_master_page() {
+        let xml = br#"<office:document-styles><office:automatic-styles>
+            <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout>
+            <style:page-layout style:name="pm2">
+            <style:page-layout-properties fo:page-width="10in" fo:page-height="5in" fo:margin-left="1in" style:print-orientation="landscape"/>
+            </style:page-layout>
+            </office:automatic-styles><office:master-styles>
+            <style:master-page style:name="Standard" style:page-layout-name="pm2"/>
+            <style:master-page style:name="Other" style:page-layout-name="pm1"/>
+            </office:master-styles></office:document-styles>"#;
+        let mut sec = wordcraft_doc::SectionProps::default();
+        apply_page_layout(xml, &mut sec);
+        assert!(sec.landscape);
+        assert_eq!((sec.page_w, sec.page_h, sec.margin_left, sec.margin_top), (720.0, 360.0, 72.0, 72.0));
     }
 
     #[test]
