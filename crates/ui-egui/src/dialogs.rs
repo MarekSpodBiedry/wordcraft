@@ -3443,12 +3443,8 @@ mod tests {
         assert!((before.center().x - screen.center().x).abs() <= 1.0, "opens centred: {before:?} in {screen:?}");
         let grab = egui::pos2(before.center().x, before.top() + 10.0);
         let drop = grab + vec2(-200.0, 120.0);
-        let button = |pos, pressed| egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
+        let button =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
         h.event(egui::Event::PointerMoved(grab));
         h.step();
         h.event(button(grab, true));
