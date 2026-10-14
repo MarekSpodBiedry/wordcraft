@@ -233,26 +233,6 @@ fn write_prefs(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     written
 }
 
-#[cfg(test)]
-mod tests {
-    use super::write_prefs;
-
-    #[test]
-    fn failed_preferences_write_keeps_the_old_file_and_reports_the_error() {
-        let dir = std::env::temp_dir().join(format!("wordcraft-prefs-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("ui.json");
-        std::fs::write(&path, b"old").unwrap();
-        write_prefs(&path, b"new").unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"new");
-        // A directory squatting on the temporary name makes the preparation step fail.
-        std::fs::create_dir(dir.join(format!(".ui.json.{}.tmp", std::process::id()))).unwrap();
-        assert!(write_prefs(&path, b"newer").is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), b"new");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
 /// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), File › Print
 /// through the system spooler (`print`), the system clipboard's text, formatted copies,
 /// pictures and format names (`clipboard`, #45, #584, #687, #833), the system's animation setting
@@ -446,4 +426,24 @@ fn main() -> eframe::Result {
             )))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_prefs;
+
+    #[test]
+    fn failed_preferences_write_keeps_the_old_file_and_reports_the_error() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-prefs-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ui.json");
+        std::fs::write(&path, b"old").unwrap();
+        write_prefs(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        // A directory squatting on the temporary name makes the preparation step fail.
+        std::fs::create_dir(dir.join(format!(".ui.json.{}.tmp", std::process::id()))).unwrap();
+        assert!(write_prefs(&path, b"newer").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
