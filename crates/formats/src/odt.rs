@@ -1179,12 +1179,15 @@ fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
 struct Styles {
     map: HashMap<String, StyleInfo>,
     lists: HashMap<String, Vec<bool>>,
+    /// Font of `style:default-style` for paragraphs (the document default, ODF 1.3 §16.4).
+    default_font: Option<String>,
 }
 
 impl Styles {
     fn read(&mut self, xml: &[u8], auto_section_is_auto: bool) {
         let mut in_auto = false;
         let mut cur: Option<(String, StyleInfo)> = None;
+        let mut in_default = false;
         let mut list: Option<(String, Vec<bool>)> = None;
         events(xml, |ev| match ev {
             Ev::Start(q, a) => match local(&q) {
@@ -1195,11 +1198,20 @@ impl Styles {
                             parent: get(&a, "style:parent-style-name").map(String::from),
                             display: get(&a, "style:display-name").map(String::from),
                             auto: in_auto && auto_section_is_auto,
-                            outline: get(&a, "style:default-outline-level").and_then(|v| v.parse::<u8>().ok()),
+                            outline: get(&a, "style:default-outline-level").and_then(|v| v.trim().parse::<u8>().ok()),
                             master_page: get(&a, "style:master-page-name").map(String::from),
                             ..Default::default()
                         };
                         cur = Some((name.to_string(), info));
+                    }
+                }
+                "default-style" if q.starts_with("style:") => in_default = get(&a, "style:family") == Some("paragraph"),
+                "text-properties" if in_default && cur.is_none() => {
+                    if let Some(fam) = get(&a, "fo:font-family").or_else(|| get(&a, "style:font-name")) {
+                        let fam = fam.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
+                        if !fam.is_empty() && !model::is_mono(fam) {
+                            self.default_font = Some(fam.to_string());
+                        }
                     }
                 }
                 "text-properties" => {
@@ -1297,7 +1309,7 @@ impl Styles {
                 "list-style" => list = get(&a, "style:name").map(|n| (n.to_string(), vec![false; 10])),
                 "list-level-style-number" | "list-level-style-bullet" | "list-level-style-image" => {
                     if let Some((_, v)) = &mut list {
-                        let lv = get(&a, "text:level").and_then(|l| l.parse::<usize>().ok()).unwrap_or(1).clamp(1, 10);
+                        let lv = get(&a, "text:level").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 10);
                         let ordered = local(&q) == "list-level-style-number" && get(&a, "style:num-format").is_some_and(|f| !f.is_empty());
                         if let Some(slot) = v.get_mut(lv - 1) {
                             *slot = ordered;
@@ -1308,6 +1320,7 @@ impl Styles {
             },
             Ev::End(q) => match local(&q) {
                 "automatic-styles" => in_auto = false,
+                "default-style" if q.starts_with("style:") => in_default = false,
                 "style" if q.starts_with("style:") => {
                     if let Some((n, s)) = cur.take()
                         && self.map.len() < 100_000
@@ -1324,6 +1337,11 @@ impl Styles {
             },
             Ev::Text(_) => {}
         });
+    }
+
+    /// The document's default font: the Standard paragraph style's, else the default style's.
+    fn doc_font(&self) -> Option<String> {
+        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.clone()).or_else(|| self.default_font.clone())
     }
 
     fn chain<'a>(&'a self, name: &'a str) -> Vec<(&'a str, &'a StyleInfo)> {
@@ -1460,6 +1478,8 @@ struct Body<'a> {
     containers: Vec<Vec<FBlock>>,
     fmt: Vec<Fmt>,
     para: Option<Para>,
+    /// The text read last ended in a space collapsed from XML whitespace (not a `text:s`).
+    xml_space_end: bool,
     para_cont: bool,
     /// Open lists: (style name, item open, item used).
     lists: Vec<(Option<String>, bool)>,
@@ -1628,8 +1648,19 @@ impl Body<'_> {
             || p.mark_ins.is_some()
             || p.mark_del.is_some()
             || p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) if f.ins.is_some() || f.del.is_some()));
-        if p.kind != Kind::Code && !tracked {
-            p.trim();
+        // Leading XML whitespace is never read (see `text`); a trailing one is trimmed here.
+        // Explicit `text:s` spaces and tabs stay.
+        let xml_space_end = std::mem::take(&mut self.xml_space_end);
+        if p.kind != Kind::Code
+            && !tracked
+            && xml_space_end
+            && let Some(Inline::Text(t, _)) = p.inlines.last_mut()
+            && t.ends_with(' ')
+        {
+            t.pop();
+            if t.is_empty() {
+                p.inlines.pop();
+            }
         }
         if p.kind == Kind::Rule && !p.is_empty() {
             p.kind = Kind::Normal;
@@ -1669,6 +1700,7 @@ impl Body<'_> {
             }
             self.start_para(None, None);
         }
+        self.xml_space_end = false;
         if let Some(p) = &mut self.para {
             p.push_text(t, &f);
         }
@@ -1718,6 +1750,7 @@ impl Body<'_> {
         }
         if !s.is_empty() {
             self.push_text(&s);
+            self.xml_space_end = s.ends_with(' ');
         }
     }
 
@@ -1803,7 +1836,8 @@ impl Body<'_> {
                 self.skip = 1;
             }
             "p" | "h" if !self.in_desc => {
-                let h = if local(q) == "h" { Some(get(a, "text:outline-level").and_then(|v| v.parse::<u8>().ok()).unwrap_or(1)) } else { None };
+                let h =
+                    if local(q) == "h" { Some(get(a, "text:outline-level").and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(1)) } else { None };
                 self.start_para(get(a, "text:style-name"), h);
             }
             "span" => {
@@ -1825,7 +1859,7 @@ impl Body<'_> {
                 self.fmt.push(f);
             }
             "s" => {
-                let n = get(a, "text:c").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
+                let n = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
                 self.push_text(&" ".repeat(n));
             }
             "tab" => self.push_text("\t"),
@@ -1877,8 +1911,8 @@ impl Body<'_> {
             }
             "table-cell" => {
                 self.end_para();
-                let span = get(a, "table:number-columns-spanned").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).clamp(1, 63);
-                let rows = get(a, "table:number-rows-spanned").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
+                let span = get(a, "table:number-columns-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 63);
+                let rows = get(a, "table:number-rows-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
                 let shading = get(a, "table:style-name").and_then(|s| self.styles.cell_background(s));
                 if let Some(t) = self.tables.last_mut() {
                     t.hcover = span as usize - 1;
@@ -2295,11 +2329,11 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
 
 /// [`parse`], with the last section's properties (the others are on the paragraphs that end them).
 fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
-    parse_tracked(bytes).map(|(f, last, _)| (f, last))
+    parse_tracked(bytes).map(|(f, last, _, _)| (f, last))
 }
 
 /// [`parse_full`], plus whether change tracking is on (`None`: the document has no tracked changes).
-fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>), String> {
+fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>), String> {
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);
@@ -2328,6 +2362,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>), Str
         containers: vec![Vec::new()],
         fmt: Vec::new(),
         para: None,
+        xml_space_end: false,
         para_cont: false,
         lists: Vec::new(),
         lists_saved: Vec::new(),
@@ -2396,13 +2431,16 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>), Str
         blocks.push(FBlock::Para(Para::default()));
     }
     let track = body.track;
-    Ok((Flow { blocks, meta }, last, track))
+    Ok((Flow { blocks, meta }, last, track, styles.doc_font()))
 }
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
-    let (flow, last, track) = parse_tracked(bytes)?;
+    let (flow, last, track, font) = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
+    if font.is_some() {
+        doc.styles.default_chr.font = font;
+    }
     doc.last_section = last;
     if let Some(t) = track {
         doc.settings.track_changes = t;
@@ -2519,6 +2557,25 @@ mod tests {
         assert_eq!(length("12pt"), Some(12.0));
         assert!((length("2.54cm").unwrap() - 72.0).abs() < 0.01);
         assert_eq!(length("x"), None);
+    }
+
+    #[test]
+    fn default_paragraph_style_font_becomes_document_font() {
+        // LibreOffice keeps the font in the Standard style or in `style:default-style`; the import
+        // used to skip both and the text fell back to the built-in body font.
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p>Hi</text:p></office:text></office:body></office:document-content>"#
+        );
+        let standard = format!(
+            r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DejaVu Serif"/></style:default-style><style:style style:name="Standard" style:family="paragraph"><style:text-properties style:font-name="Times New Roman"/></style:style></office:styles></office:document-styles>"#
+        );
+        let doc = import(&package(&content, Some(&standard))).unwrap();
+        assert_eq!(doc.styles.default_chr.font.as_deref(), Some("Times New Roman"));
+        let only_default = format!(
+            r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DejaVu Serif"/></style:default-style></office:styles></office:document-styles>"#
+        );
+        let doc = import(&package(&content, Some(&only_default))).unwrap();
+        assert_eq!(doc.styles.default_chr.font.as_deref(), Some("DejaVu Serif"));
     }
 
     #[test]
@@ -3252,5 +3309,55 @@ mod tests {
             let back = import(&export(&doc).unwrap()).unwrap();
             assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), src, "{src:?}");
         }
+    }
+
+    #[test]
+    fn whitespace_in_attributes_is_trimmed() {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text>
+            <text:h text:outline-level=" 2 ">Heading</text:h>
+            <text:p>A<text:s text:c=" 3 "/>B</text:p>
+            <table:table>
+                <table:table-column/>
+                <table:table-row>
+                    <table:table-cell table:number-columns-spanned=" 2 " table:number-rows-spanned=" 1 ">
+                        <text:p>Cell</text:p>
+                    </table:table-cell>
+                </table:table-row>
+            </table:table>
+            </office:text></office:body></office:document-content>"#
+        );
+        let flow = parse(&package(&content, None)).unwrap();
+        let h = match &flow.blocks[0] {
+            FBlock::Para(p) => p.kind,
+            _ => panic!("expected heading para"),
+        };
+        assert_eq!(h, Kind::Heading(2));
+
+        let p_text = match &flow.blocks[1] {
+            FBlock::Para(p) => p.text(),
+            _ => panic!("expected paragraph"),
+        };
+        assert_eq!(p_text, "A   B");
+
+        let colspan = match &flow.blocks[2] {
+            FBlock::Table(t) => t.rows[0][0].colspan,
+            _ => panic!("expected table"),
+        };
+        assert_eq!(colspan, 2);
+    }
+
+    #[test]
+    fn explicit_spaces_at_paragraph_ends_are_kept() {
+        // `text:s` spaces are content; only collapsible XML whitespace is trimmed at the ends.
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p><text:s text:c="4"/>lead</text:p><text:p>trail<text:s text:c="2"/></text:p><text:p>  plain  </text:p><text:p>  <text:s/>x <text:s/> </text:p></office:text></office:body></office:document-content>"#
+        );
+        let f = parse(&package(&content, None)).unwrap();
+        let texts: Vec<String> = paras(&f).iter().map(|p| p.text()).collect();
+        assert_eq!(texts, vec!["    lead", "trail  ", "plain", " x  "]);
+        let d = Document::from_text("    indented code  ");
+        let back = import(&export(&d).unwrap()).unwrap();
+        assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body).trim_end_matches('\n'), "    indented code  ");
     }
 }
