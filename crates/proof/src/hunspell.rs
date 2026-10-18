@@ -218,10 +218,10 @@ mod tests {
         let key = "test_unreadable_2830";
         assert_eq!(load_error(key), None);
         let dic = Path::new("/dicts/test.dic");
-        assert!(note_load(key, dic, decode(b"SET ISO8859-1\n", b"")).is_err());
+        assert!(note_load(key, dic, decode(b"SET SHIFT_JIS\n", b"")).is_err());
         let (file, reason) = load_error(key).expect("error kept");
         assert_eq!(file, dic);
-        assert_eq!(reason, "unsupported encoding ISO8859-1");
+        assert_eq!(reason, "unsupported encoding SHIFT_JIS");
         assert!(note_load(key, dic, decode(b"SET UTF-8\n", b"")).is_ok());
         assert_eq!(load_error(key), None);
         let _ = note_load::<()>(key, dic, Err("too large".into()));
