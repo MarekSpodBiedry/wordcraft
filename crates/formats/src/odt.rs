@@ -1192,7 +1192,7 @@ impl Styles {
                             parent: get(&a, "style:parent-style-name").map(String::from),
                             display: get(&a, "style:display-name").map(String::from),
                             auto: in_auto && auto_section_is_auto,
-                            outline: get(&a, "style:default-outline-level").and_then(|v| v.parse::<u8>().ok()),
+                            outline: get(&a, "style:default-outline-level").and_then(|v| v.trim().parse::<u8>().ok()),
                             master_page: get(&a, "style:master-page-name").map(String::from),
                             ..Default::default()
                         };
@@ -1298,7 +1298,7 @@ impl Styles {
                 "list-style" => list = get(&a, "style:name").map(|n| (n.to_string(), vec![false; 10])),
                 "list-level-style-number" | "list-level-style-bullet" | "list-level-style-image" => {
                     if let Some((_, v)) = &mut list {
-                        let lv = get(&a, "text:level").and_then(|l| l.parse::<usize>().ok()).unwrap_or(1).clamp(1, 10);
+                        let lv = get(&a, "text:level").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 10);
                         let ordered = local(&q) == "list-level-style-number" && get(&a, "style:num-format").is_some_and(|f| !f.is_empty());
                         if let Some(slot) = v.get_mut(lv - 1) {
                             *slot = ordered;
@@ -1465,6 +1465,8 @@ struct Body<'a> {
     containers: Vec<Vec<FBlock>>,
     fmt: Vec<Fmt>,
     para: Option<Para>,
+    /// The text read last ended in a space collapsed from XML whitespace (not a `text:s`).
+    xml_space_end: bool,
     para_cont: bool,
     /// Open lists: (style name, item open, item used).
     lists: Vec<(Option<String>, bool)>,
@@ -1632,8 +1634,19 @@ impl Body<'_> {
             || p.mark_ins.is_some()
             || p.mark_del.is_some()
             || p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) if f.ins.is_some() || f.del.is_some()));
-        if p.kind != Kind::Code && !tracked {
-            p.trim();
+        // Leading XML whitespace is never read (see `text`); a trailing one is trimmed here.
+        // Explicit `text:s` spaces and tabs stay.
+        let xml_space_end = std::mem::take(&mut self.xml_space_end);
+        if p.kind != Kind::Code
+            && !tracked
+            && xml_space_end
+            && let Some(Inline::Text(t, _)) = p.inlines.last_mut()
+            && t.ends_with(' ')
+        {
+            t.pop();
+            if t.is_empty() {
+                p.inlines.pop();
+            }
         }
         if p.kind == Kind::Rule && !p.is_empty() {
             p.kind = Kind::Normal;
@@ -1673,6 +1686,7 @@ impl Body<'_> {
             }
             self.start_para(None, None);
         }
+        self.xml_space_end = false;
         if let Some(p) = &mut self.para {
             p.push_text(t, &f);
         }
@@ -1722,6 +1736,7 @@ impl Body<'_> {
         }
         if !s.is_empty() {
             self.push_text(&s);
+            self.xml_space_end = s.ends_with(' ');
         }
     }
 
@@ -1807,7 +1822,8 @@ impl Body<'_> {
                 self.skip = 1;
             }
             "p" | "h" if !self.in_desc => {
-                let h = if local(q) == "h" { Some(get(a, "text:outline-level").and_then(|v| v.parse::<u8>().ok()).unwrap_or(1)) } else { None };
+                let h =
+                    if local(q) == "h" { Some(get(a, "text:outline-level").and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(1)) } else { None };
                 self.start_para(get(a, "text:style-name"), h);
             }
             "span" => {
@@ -1829,7 +1845,7 @@ impl Body<'_> {
                 self.fmt.push(f);
             }
             "s" => {
-                let n = get(a, "text:c").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
+                let n = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
                 self.push_text(&" ".repeat(n));
             }
             "tab" => self.push_text("\t"),
@@ -1881,8 +1897,8 @@ impl Body<'_> {
             }
             "table-cell" => {
                 self.end_para();
-                let span = get(a, "table:number-columns-spanned").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).clamp(1, 63);
-                let rows = get(a, "table:number-rows-spanned").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
+                let span = get(a, "table:number-columns-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 63);
+                let rows = get(a, "table:number-rows-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
                 let shading = get(a, "table:style-name").and_then(|s| self.styles.cell_background(s));
                 if let Some(t) = self.tables.last_mut() {
                     t.hcover = span as usize - 1;
@@ -2332,6 +2348,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
         containers: vec![Vec::new()],
         fmt: Vec::new(),
         para: None,
+        xml_space_end: false,
         para_cont: false,
         lists: Vec::new(),
         lists_saved: Vec::new(),
@@ -3261,5 +3278,55 @@ mod tests {
             let back = import(&export(&doc).unwrap()).unwrap();
             assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), src, "{src:?}");
         }
+    }
+
+    #[test]
+    fn whitespace_in_attributes_is_trimmed() {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text>
+            <text:h text:outline-level=" 2 ">Heading</text:h>
+            <text:p>A<text:s text:c=" 3 "/>B</text:p>
+            <table:table>
+                <table:table-column/>
+                <table:table-row>
+                    <table:table-cell table:number-columns-spanned=" 2 " table:number-rows-spanned=" 1 ">
+                        <text:p>Cell</text:p>
+                    </table:table-cell>
+                </table:table-row>
+            </table:table>
+            </office:text></office:body></office:document-content>"#
+        );
+        let flow = parse(&package(&content, None)).unwrap();
+        let h = match &flow.blocks[0] {
+            FBlock::Para(p) => p.kind,
+            _ => panic!("expected heading para"),
+        };
+        assert_eq!(h, Kind::Heading(2));
+
+        let p_text = match &flow.blocks[1] {
+            FBlock::Para(p) => p.text(),
+            _ => panic!("expected paragraph"),
+        };
+        assert_eq!(p_text, "A   B");
+
+        let colspan = match &flow.blocks[2] {
+            FBlock::Table(t) => t.rows[0][0].colspan,
+            _ => panic!("expected table"),
+        };
+        assert_eq!(colspan, 2);
+    }
+
+    #[test]
+    fn explicit_spaces_at_paragraph_ends_are_kept() {
+        // `text:s` spaces are content; only collapsible XML whitespace is trimmed at the ends.
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p><text:s text:c="4"/>lead</text:p><text:p>trail<text:s text:c="2"/></text:p><text:p>  plain  </text:p><text:p>  <text:s/>x <text:s/> </text:p></office:text></office:body></office:document-content>"#
+        );
+        let f = parse(&package(&content, None)).unwrap();
+        let texts: Vec<String> = paras(&f).iter().map(|p| p.text()).collect();
+        assert_eq!(texts, vec!["    lead", "trail  ", "plain", " x  "]);
+        let d = Document::from_text("    indented code  ");
+        let back = import(&export(&d).unwrap()).unwrap();
+        assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body).trim_end_matches('\n'), "    indented code  ");
     }
 }
