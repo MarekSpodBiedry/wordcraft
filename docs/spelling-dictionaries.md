@@ -1,12 +1,17 @@
 # Installing spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** major (first version)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-18 · **Change:** minor (a dictionary that is installed but can't be read shows **(dictionary unreadable)** with the file and reason, #2830; previously major: first version)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian and
 Turkish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
 WordCraft reads at runtime. These dictionaries are not bundled: they are large, and several are
 GPL or LGPL licensed. Without one, the language isn't checked. The status bar then shows the
 language with **(no dictionary)**, for example *Português (Brasil) (no dictionary)*.
+
+If a dictionary is installed but can't be read (an unsupported `SET` encoding, a file over the
+size limit, a parse error), the language isn't checked either, and the status bar shows
+**(dictionary unreadable)** instead. Its tooltip gives the `.dic` file and the reason, and
+**File › Options › Proofing** lists the same reason next to the file.
 
 Install a dictionary once, restart WordCraft, and the language is checked as you type.
 
@@ -122,4 +127,5 @@ Never commit dictionary files to this repository: they stay on the user's system
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | An installed dictionary that can't be read shows **(dictionary unreadable)** in the status bar, with the file and reason in its tooltip and in File › Options › Proofing (#2830) |
 | 2026-10-16 | major | First version: the file names per language, the search order and folders on Windows, macOS and Linux, installing `pt_BR` on each, and how to check it works |
