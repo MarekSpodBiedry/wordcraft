@@ -403,6 +403,12 @@ impl Writer {
                     let a = esc(a);
                     out.push_str(&format!("{{\\*\\bkmkstart {a}}}{{\\*\\bkmkend {a}}}"));
                 }
+                // The mark and the note as Word writes them: `\chftn` is the automatic number and
+                // `\ftnalt` makes the note an endnote.
+                Inline::NoteMark { text, endnote, .. } => {
+                    let alt = if *endnote { "\\ftnalt" } else { "" };
+                    out.push_str(&format!("{{\\super\\chftn{{\\footnote{alt}\\pard\\plain {{\\super\\chftn}} {}\\par}}}}", esc(text)));
+                }
                 Inline::Figure(_) | Inline::Equation { .. } => {}
             }
         }
