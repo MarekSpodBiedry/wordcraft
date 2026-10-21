@@ -93,12 +93,18 @@ pub enum Inline {
     },
     /// A footnote or endnote reference. `n` numbers the notes in the order they are first
     /// referenced (from 1), `label` is the mark shown (the note's custom mark or `n`) and `text`
-    /// is the note's text on one line. Formats that keep notes write the mark here and the text
-    /// at the end ([`flow_notes`]); the others leave it out. `endnote` tells an endnote from a footnote.
+    /// is the note's text on one line, as the body shows it: hidden text is not in it, and
+    /// neither is tracked-deleted text. Formats that keep notes write the mark here and the text
+    /// at the end ([`flow_notes`]); the others leave it out. `endnote` tells an endnote from a
+    /// footnote. `custom` is set when `label` is the note's own mark, not its number. `runs` is
+    /// the note's text with its formatting, for the formats that keep revisions ([`from_doc_tracked`]
+    /// keeps tracked-deleted text in it, with its marks); empty otherwise.
     NoteMark {
         n: usize,
         label: String,
+        custom: bool,
         text: String,
+        runs: Vec<Inline>,
         endnote: bool,
     },
 }
@@ -144,17 +150,49 @@ pub fn flow_notes(flow: &Flow) -> Vec<FNote> {
 
 /// Number the note references in `blocks` in order and give each its mark and text. On entry
 /// `n` holds the id of the note's part ([`flow_paras_in`]).
-fn number_notes(doc: &Document, blocks: &mut [FBlock]) {
+/// The text of a note's flow blocks as inline runs, paragraphs and cells apart by a space:
+/// the runs keep their formatting (and, when tracking, their revision marks).
+fn note_runs(blocks: &[FBlock], out: &mut Vec<Inline>) {
+    for b in blocks {
+        match b {
+            FBlock::Para(p) => {
+                if !out.is_empty() {
+                    out.push(Inline::Text(" ".to_string(), Fmt::default()));
+                }
+                for i in &p.inlines {
+                    match i {
+                        Inline::Text(..) => out.push(i.clone()),
+                        Inline::Equation { linear, .. } => out.push(Inline::Text(linear.clone(), Fmt::default())),
+                        Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::NoteMark { .. } => {}
+                    }
+                }
+            }
+            FBlock::Table(t) => t.rows.iter().flatten().for_each(|c| note_runs(&c.blocks, out)),
+        }
+    }
+}
+
+fn number_notes(doc: &Document, blocks: &mut [FBlock], tracked: bool) {
     let mut seen: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
     each_inline_mut(blocks, &mut |i| {
-        if let Inline::NoteMark { n, label, text, .. } = i {
+        if let Inline::NoteMark { n, label, custom, text, runs, .. } = i {
             let id = u32::try_from(*n).unwrap_or(0);
             let next = seen.len() + 1;
             *n = *seen.entry(id).or_insert(next);
+            *custom = !label.is_empty();
             if label.is_empty() {
                 *label = n.to_string();
             }
-            *text = doc.plain_text(StoryRef::Part(id)).split_whitespace().collect::<Vec<_>>().join(" ");
+            // The note's text goes through the same run filter as the body's: hidden text stays
+            // out, and so does tracked-deleted text unless the flow keeps tracked changes (then
+            // `runs` has it, marked; `text` is for the formats that don't keep revisions).
+            let mut all = Vec::new();
+            if let Some(story) = doc.story(StoryRef::Part(id)) {
+                note_runs(&flow_blocks(doc, story, 0, tracked), &mut all);
+            }
+            let joined: String = all.iter().filter_map(|r| if let Inline::Text(t, _) = r { Some(t.as_str()) } else { None }).collect();
+            *text = joined.split_whitespace().collect::<Vec<_>>().join(" ");
+            *runs = if tracked { all } else { Vec::new() };
         }
     });
 }
@@ -1067,7 +1105,8 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                     }
                     // `number_notes` numbers it; until then `n` is the id of the note's part.
                     let endnote = *kind == wordcraft_doc::para::NoteKind::Endnote;
-                    out.inlines.push(Inline::NoteMark { n: *id as usize, label: custom.clone(), text: String::new(), endnote });
+                    let (n, label, text) = (*id as usize, custom.clone(), String::new());
+                    out.inlines.push(Inline::NoteMark { n, label, custom: false, text, runs: Vec::new(), endnote });
                 }
                 Some(o) => buf.push_str(o.plain_text()),
                 None => {}
@@ -1162,7 +1201,7 @@ pub fn from_doc_tracked(doc: &Document) -> Flow {
 fn flow_of(doc: &Document, tracked: bool) -> Flow {
     let c = &doc.core;
     let mut blocks = flow_blocks(doc, &doc.body, 0, tracked);
-    number_notes(doc, &mut blocks);
+    number_notes(doc, &mut blocks, tracked);
     Flow {
         blocks,
         meta: Meta {
